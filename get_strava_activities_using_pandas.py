@@ -5,7 +5,6 @@ import time
 from datetime import datetime
 from pandas import json_normalize
 import pandas as pd
-import csv
 
 from requests_oauthlib import OAuth2Session
 from dotenv import load_dotenv
@@ -73,14 +72,28 @@ def get_activities_and_create_csv():
     url = "https://www.strava.com/api/v3/activities"
     access_token = get_access_token(strava_tokens_outfile)['access_token']
 
+    # Create the dataframe ready for the API call to store your activity data
+    activities_df = pd.DataFrame(
+        columns = [
+                "Date",
+                "Name",
+                "Type",
+                "Distance_in_Miles",
+                "Time_in_Hours",
+                "Time_in_Minutes",
+                "Pace_in_mph",
+                "Pace_in_Minutes_per_Mile"
+        ]
+    )
+
     # Loop through all activities
     page = 1
-    activities = []
+
     while True:
         full_activities_data = requests.get(url + '?access_token=' + access_token + '&per_page=200' + '&page=' + str(page))
         full_activities_data_json = full_activities_data.json()
-
-        if 'Rate Limit Exceeded' in full_activities_data_json:
+        full_activities_data_df = json_normalize(full_activities_data_json)
+        if 'Rate Limit Exceeded' in full_activities_data_df:
             print("ERROR: RATE LIMIT REACHED")
             break
 
@@ -88,15 +101,15 @@ def get_activities_and_create_csv():
         if (not full_activities_data_json):
             print("Complete: No more pages to iterate thru, exiting loop")
             break
-        
-        for i in range(len(full_activities_data_json)):
+
+        for i in range(len(full_activities_data_df)):
             # Set variables
-            unformatted_start_date_local= datetime.strptime(full_activities_data_json[i]['start_date_local'], '%Y-%m-%dT%H:%M:%S%z')
+            unformatted_start_date_local= datetime.strptime(full_activities_data_df['start_date_local'].iloc[i], '%Y-%m-%dT%H:%M:%S%z')
             formatted_start_date_local = datetime.strftime(unformatted_start_date_local, '%m-%d-%Y %H:%M:%S')
-            name = full_activities_data_json[i]['name']
-            type = full_activities_data_json[i]['type']
-            elapsed_time = full_activities_data_json[i]['elapsed_time']
-            distance_in_miles = round((full_activities_data_json[i]['distance'] / 1609.344), 2)
+            name = full_activities_data_df['name'].iloc[i]
+            type = full_activities_data_df['type'].iloc[i]
+            elapsed_time = full_activities_data_df['elapsed_time'].iloc[i]
+            distance_in_miles = round((full_activities_data_df['distance'].iloc[i] / 1609.344), 2)
             time_in_hr = round((elapsed_time / 60 / 60), 2)
             time_in_min = round((elapsed_time / 60), 2)
             if distance_in_miles != 0:
@@ -106,25 +119,21 @@ def get_activities_and_create_csv():
                 pace_in_mph = 0
                 pace_in_min_per_mile = 0
 
-            new_row = {
-                "Date": formatted_start_date_local,
-                "Name": name,
-                "Type": type,
-                "Distance_in_Miles": distance_in_miles,
-                "Time_in_Hours": time_in_hr,
-                "Time_in_Minutes": time_in_min,
-                "Pace_in_mph": pace_in_mph,
-                "Pace_in_Minutes_per_Mile": pace_in_min_per_mile
-            }
-
-            activities.append(new_row)
+            # Set new row with each variable
+            new_row = pd.DataFrame({'Date': formatted_start_date_local, 
+                                    'Name': name, 
+                                    'Type': type, 
+                                    'Distance_in_Miles': distance_in_miles, 
+                                    'Time_in_Hours': time_in_hr, 
+                                    'Time_in_Minutes': time_in_min, 
+                                    'Pace_in_mph': pace_in_mph, 
+                                    'Pace_in_Minutes_per_Mile': pace_in_min_per_mile}, 
+                                    index=[i])
+            
+            # Add new row to dataframe
+            activities_df = pd.concat([new_row,activities_df.loc[:]]).reset_index(drop=True)
         page += 1
-
-    with open(strava_activities_outfile, mode="w") as csvfile:
-        fieldnames = activities[0].keys()
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(activities)
+        activities_df.to_csv(strava_activities_outfile)
 
 if os.path.isfile(strava_tokens_outfile):
     expiration_date = get_access_token(strava_tokens_outfile)['expires_at']
